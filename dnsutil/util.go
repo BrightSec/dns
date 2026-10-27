@@ -78,6 +78,10 @@ func TrimDomainName(s, origin string) string {
 		}
 	}
 
+	if m == 0 || m > len(slabels) {
+		return original // no labels in common (e.g. empty/root origin)
+	}
+
 	// Return the first (len-m) labels:
 	return s[:slabels[len(slabels)-m]-1]
 }
