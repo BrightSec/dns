@@ -105,6 +105,13 @@ type generateReader struct {
 
 	eof bool
 
+	// Tracking of the lexer's view of the generated output, so that a
+	// quoted string left open at the end of an iteration is rejected
+	// instead of being carried over (and growing) across all iterations.
+	inQuote bool
+	lexEsc  bool
+	inCom   bool
+
 	file string
 	lex  *lex
 }
@@ -127,6 +134,36 @@ func (r *generateReader) Read(p []byte) (int, error) {
 }
 
 func (r *generateReader) ReadByte() (byte, error) {
+	c, err := r.readByte()
+	if err != nil {
+		return c, err
+	}
+
+	switch {
+	case r.inCom:
+		if c == '\n' {
+			r.inCom = false
+		}
+	case c == '\\':
+		r.lexEsc = !r.lexEsc
+	case c == '"':
+		if !r.lexEsc {
+			r.inQuote = !r.inQuote
+		}
+		r.lexEsc = false
+	case c == ';':
+		if !r.lexEsc && !r.inQuote {
+			r.inCom = true
+		}
+		r.lexEsc = false
+	default:
+		r.lexEsc = false
+	}
+
+	return c, nil
+}
+
+func (r *generateReader) readByte() (byte, error) {
 	if r.eof {
 		return 0, io.EOF
 	}
@@ -135,6 +172,10 @@ func (r *generateReader) ReadByte() (byte, error) {
 	}
 
 	if r.si >= len(r.s) {
+		if r.inQuote {
+			return 0, r.parseError("unterminated quote in $GENERATE", len(r.s))
+		}
+
 		r.si = 0
 		r.cur += r.step
 
@@ -153,7 +194,7 @@ func (r *generateReader) ReadByte() (byte, error) {
 		}
 
 		r.escape = true
-		return r.ReadByte()
+		return r.readByte()
 	case '$':
 		if r.escape {
 			r.escape = false
@@ -200,7 +241,7 @@ func (r *generateReader) ReadByte() (byte, error) {
 	default:
 		if r.escape { // Pretty useless here
 			r.escape = false
-			return r.ReadByte()
+			return r.readByte()
 		}
 
 		return r.s[si], nil
